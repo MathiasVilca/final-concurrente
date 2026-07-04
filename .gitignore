@@ -1,0 +1,9 @@
+*.class
+# Carpetas de compilación de editores
+bin/
+out/
+.build/
+.idea/
+*.iml
+.vscode/
+.DS_Store
