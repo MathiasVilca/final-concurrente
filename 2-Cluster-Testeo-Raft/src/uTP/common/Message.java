@@ -1,7 +1,5 @@
 package uTP.common;
 
-package uTP.common;
-
 public class Message {
     public String type;      // VOTE_REQ, HEARTBEAT, CLI_REQ, REDIRECT, etc.
     public String senderId;  // Identificador del nodo (ej: NODE_8001)
