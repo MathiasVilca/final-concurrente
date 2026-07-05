@@ -28,7 +28,7 @@ public class PeerClient {
 
             } catch (Exception e) {
                 // Es normal ver esto si intentamos hablarle a un nodo que está apagado
-                System.err.println("[PeerClient] No se pudo enviar mensaje a " + ip + ":" + port + " -> " + e.getMessage());
+                System.err.println("[PeerClient] NOTA, ESTO ESTA BIEN No se pudo enviar mensaje a " + ip + ":" + port + " -> " + e.getMessage());
             }
         }).start();
     }

@@ -27,14 +27,14 @@ public class ClusterLauncher {
 
         // Truco para la demostración de tolerancia a fallos ante el profesor:
         // Añadimos un hook para apagar el Nodo 1 simulando una caída tras 15 segundos
-        /*
+        ///*
         try {
-            Thread.sleep(15000);
+            Thread.sleep(5000);
             System.out.println("\n\n⚠️ [SIMULACIÓN] !!! MATANDO NODO 1 (LÍDER) PARA PROBAR RAFT !!! ⚠️\n\n");
             nodo1.shutdown();
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
-        */
+        //*/
     }
 }

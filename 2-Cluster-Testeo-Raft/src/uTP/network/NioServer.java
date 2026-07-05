@@ -1,6 +1,8 @@
 package uTP.network;
 
 import uTP.common.Message;
+import uTP.raft.RaftController;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
@@ -14,10 +16,12 @@ public class NioServer implements Runnable {
     private Selector selector;
     private ServerSocketChannel serverChannel;
     private boolean running = true;
+    private RaftController raftController;
 
     public NioServer(String nodeId, int port) {
         this.nodeId = nodeId;
         this.port = port;
+        this.raftController = new RaftController(nodeId);
     }
 
     @Override
@@ -61,7 +65,8 @@ public class NioServer implements Runnable {
         client.configureBlocking(false);
         // Registramos el cliente para lectura y le adjuntamos un StringBuilder para acumular los datos
         client.register(selector, SelectionKey.OP_READ, new StringBuilder());
-        System.out.println("[" + nodeId + "] Nueva conexión aceptada desde: " + client.getRemoteAddress());
+        //Comentadooooo
+        //System.out.println("[" + nodeId + "] Nueva conexión aceptada desde: " + client.getRemoteAddress());
     }
 
     private void handleRead(SelectionKey key) {
@@ -72,7 +77,8 @@ public class NioServer implements Runnable {
         try {
             int bytesRead = client.read(byteBuffer);
             if (bytesRead == -1) { // El cliente cerró la conexión
-                System.out.println("[" + nodeId + "] Conexión cerrada por el cliente.");
+                //when comentas
+                //System.out.println("[" + nodeId + "] Conexión cerrada por el cliente.");
                 client.close();
                 key.cancel();
                 return;
@@ -107,24 +113,50 @@ public class NioServer implements Runnable {
 
     // Punto crítico donde el Día 2 y 3 inyectarás la lógica de RAFT y HILOS WORKERS
     private void processIncomingMessage(Message msg, SocketChannel client) throws IOException {
-        System.out.println("[" + nodeId + "] Mensaje Recibido -> Tipo: " + msg.type + " | De: " + msg.senderId + " | Payload: " + msg.payload);
 
-        // Simulación de respuesta inmediata de Eco por Socket
+        if (!msg.type.equals("HEARTBEAT")) {
+            System.out.println("[" + nodeId + "] Mensaje Recibido -> Tipo: " + msg.type + " | De: " + msg.senderId + " | Payload: " + msg.payload);
+        }
+
+        // 1. Petición de Cámaras o Clientes Externos (Síncrono)
         if (msg.type.equals("CLI_REQ")) {
+            System.out.println("[" + nodeId + "] Petición externa de IA recibida de: " + msg.senderId);
             Message response = new Message("CLI_RES", nodeId, 0, "ACK_RECIBIDO_OK");
             client.write(ByteBuffer.wrap(response.serialize().getBytes(StandardCharsets.UTF_8)));
-        } else {
-            // ➔ ¡ESTO ES LO QUE FALTABA!
-            // Si es VOTE_REQ o cualquier otro tipo de control de Raft, le respondemos un ACK genérico
-            // para que la consola del cliente reciba datos inmediatamente y no de timeout.
-            Message genericAck = new Message("ACK", nodeId, msg.term, "MENSAJE_" + msg.type + "_PROCESADO_OK");
-            client.write(ByteBuffer.wrap(genericAck.serialize().getBytes(StandardCharsets.UTF_8)));
+            return;
+        }
+
+        // 2. Mensajes de control internos del Clúster (Raft - Asíncronos)
+        // Pasamos el mensaje al controlador para que altere sus estados, cuente votos o lance heartbeats
+        raftController.handleMessage(msg);
+
+        // 3. ➔ EL TRUCO PARA EL GENERIC ACK (Solo para Debug/TestClient)
+        // Si detectamos que el mensaje viene de tu consola interactiva de pruebas (TestClient),
+        // le respondemos el ACK de inmediato para que veas la confirmación en tu pantalla.
+        // Lo envolvemos en un try-catch por si acaso un nodo real simula este ID y el socket ya está cerrado.
+        try {
+            if (msg.senderId.equalsIgnoreCase("CAMARA_TEST_1") || msg.senderId.contains("CLIENTE")) {
+                Message debugAck = new Message("ACK", nodeId, msg.term, "DEBUG_PROCESADO_OK_" + msg.type);
+                client.write(ByteBuffer.wrap(debugAck.serialize().getBytes(StandardCharsets.UTF_8)));
+            }
+        } catch (IOException e) {
+            // Si el socket ya estaba cerrado por el emisor (comportamiento normal de PeerClient),
+            // se ignora el error en silencio porque la lógica asíncrona de Raft ya se ejecutó arriba.
         }
     }
-
     public void shutdown() {
-        this.running = false;
-        if(selector != null) selector.wakeup();
+        running = false;
+        try {
+            if (selector != null) selector.wakeup();
+            if (serverChannel != null) serverChannel.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        // ➔ NUEVO: Apagamos también el cerebro del nodo para que no queden hilos zombies
+        if (raftController != null) {
+            raftController.stopRaft();
+        }
     }
 }
 
