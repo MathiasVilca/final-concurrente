@@ -7,4 +7,7 @@ out/
 *.iml
 .vscode/
 .DS_Store
-*.class
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo

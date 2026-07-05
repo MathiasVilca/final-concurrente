@@ -6,14 +6,15 @@ public class ClusterLauncher {
     public static void main(String[] args) {
         System.out.println("=================================================");
         System.out.println("   LANZADOR AUTOMÁTICO DEL CLÚSTER RAFT (uTP)    ");
+        System.out.println("   Día 3+4: Workers IA + Replicación de Log      ");
         System.out.println("=================================================");
 
-        // Definimos los 3 nodos que exige la topología mínima de consenso
+        // ── 3 Nodos del clúster ──────────────────────────────────────
         NioServer nodo1 = new NioServer("NODE_1", 8001);
         NioServer nodo2 = new NioServer("NODE_2", 8002);
         NioServer nodo3 = new NioServer("NODE_3", 8003);
 
-        // Levantamos cada nodo en su propio hilo (Thread) concurrente
+        // Cada nodo corre en su propio hilo (requisito de concurrencia)
         Thread thread1 = new Thread(nodo1, "Thread-Node-1");
         Thread thread2 = new Thread(nodo2, "Thread-Node-2");
         Thread thread3 = new Thread(nodo3, "Thread-Node-3");
@@ -22,19 +23,27 @@ public class ClusterLauncher {
         thread2.start();
         thread3.start();
 
-        System.out.println("[Launcher] 3 Nodos levantados concurrentemente.");
-        System.out.println("[Launcher] Listo para recibir conexiones de las cámaras Python...\n");
+        System.out.println("[Launcher] ✅ 3 Nodos levantados concurrentemente.");
+        System.out.println("[Launcher] ✅ WorkerPool IA iniciado en cada nodo.");
+        System.out.println("[Launcher] ✅ Listo para recibir cámaras Python.\n");
+        System.out.println("[Launcher] 🔑 Instrucciones:");
+        System.out.println("[Launcher]    1. Espera ~2s a que el clúster elija un LÍDER.");
+        System.out.println("[Launcher]    2. Ejecuta: python 3-Emulador-Camaras/camera_client.py");
+        System.out.println("[Launcher]    3. Ejecuta: python 4-Cliente-Vigilante/vigilante_app.py");
+        System.out.println("[Launcher]    4. Para demostrar tolerancia a fallos, descomenta el bloque de abajo.\n");
 
-        // Truco para la demostración de tolerancia a fallos ante el profesor:
-        // Añadimos un hook para apagar el Nodo 1 simulando una caída tras 15 segundos
-        ///*
+        // ── DEMO DE TOLERANCIA A FALLOS ──────────────────────────────
+        // Para demostrar que Raft elige un nuevo líder cuando cae el actual,
+        // descomenta el bloque siguiente JUSTO ANTES de presentar al profesor.
+        // Esto mata NODE_1 a los 15s para que los otros dos elijan uno nuevo.
+        /*
         try {
-            Thread.sleep(5000);
-            System.out.println("\n\n⚠️ [SIMULACIÓN] !!! MATANDO NODO 1 (LÍDER) PARA PROBAR RAFT !!! ⚠️\n\n");
+            Thread.sleep(15000);
+            System.out.println("\n\n⚠️ [DEMO] !!! MATANDO NODO 1 PARA PROBAR RAFT !!! ⚠️\n\n");
             nodo1.shutdown();
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
-        //*/
+        */
     }
 }

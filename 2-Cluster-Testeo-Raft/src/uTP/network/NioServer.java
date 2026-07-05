@@ -72,7 +72,7 @@ public class NioServer implements Runnable {
     private void handleRead(SelectionKey key) {
         SocketChannel client = (SocketChannel) key.channel();
         StringBuilder bufferAcumulador = (StringBuilder) key.attachment();
-        ByteBuffer byteBuffer = ByteBuffer.allocate(2048);
+        ByteBuffer byteBuffer = ByteBuffer.allocate(65536); // Grande para payloads Base64
 
         try {
             int bytesRead = client.read(byteBuffer);
@@ -111,38 +111,48 @@ public class NioServer implements Runnable {
         }
     }
 
-    // Punto crítico donde el Día 2 y 3 inyectarás la lógica de RAFT y HILOS WORKERS
+    // ─────────────────────────────────────────────────────────────────────────
+    // DÍA 3: Punto de integración entre la red y la lógica Raft + Workers
+    // ─────────────────────────────────────────────────────────────────────────
     private void processIncomingMessage(Message msg, SocketChannel client) throws IOException {
 
         if (!msg.type.equals("HEARTBEAT")) {
-            System.out.println("[" + nodeId + "] Mensaje Recibido -> Tipo: " + msg.type + " | De: " + msg.senderId + " | Payload: " + msg.payload);
+            System.out.println("[" + nodeId + "] Mensaje Recibido -> Tipo: " + msg.type
+                    + " | De: " + msg.senderId
+                    + " | Payload: " + msg.payload.substring(0, Math.min(60, msg.payload.length())));
         }
 
-        // 1. Petición de Cámaras o Clientes Externos (Síncrono)
+        // ── 1. CLI_REQ: Petición de cámara → pasar al RaftController para replicar ─────
         if (msg.type.equals("CLI_REQ")) {
-            System.out.println("[" + nodeId + "] Petición externa de IA recibida de: " + msg.senderId);
-            Message response = new Message("CLI_RES", nodeId, 0, "ACK_RECIBIDO_OK");
-            client.write(ByteBuffer.wrap(response.serialize().getBytes(StandardCharsets.UTF_8)));
+            if (msg.payload.equals("GET_LOG")) {
+                // El Cliente Vigilante pide el log completo
+                String logData = raftController.getLogAsString();
+                String respuesta = "CLI_RES|" + nodeId + "|0|" + logData + "\n";
+                try {
+                    client.write(ByteBuffer.wrap(respuesta.getBytes(StandardCharsets.UTF_8)));
+                } catch (IOException ignored) {}
+                return;
+            }
+
+            // Es una petición de clasificación de cámara
+            if (raftController.isLeader()) {
+                // Líder: iniciar replicación Raft y luego clasificar con IA
+                raftController.handleExternalRequest(msg.senderId, msg.payload, client);
+            } else {
+                // No soy el líder: avisar a la cámara que se reconecte al líder
+                String lider = raftController.getLeaderId();
+                String info  = (lider != null) ? "LIDER_ES:" + lider : "SIN_LIDER";
+                System.out.println("[" + nodeId + "] 🔀 No soy líder. Redirigiendo " + msg.senderId + " → " + info);
+                Message redir = new Message("REDIRECT", nodeId, 0, info);
+                try {
+                    client.write(ByteBuffer.wrap(redir.serialize().getBytes(StandardCharsets.UTF_8)));
+                } catch (IOException ignored) {}
+            }
             return;
         }
 
-        // 2. Mensajes de control internos del Clúster (Raft - Asíncronos)
-        // Pasamos el mensaje al controlador para que altere sus estados, cuente votos o lance heartbeats
+        // ── 2. Mensajes internos Raft (VOTE_REQ, VOTE_RES, HEARTBEAT, APPEND_ENTRIES, APPEND_ACK) ─
         raftController.handleMessage(msg);
-
-        // 3. ➔ EL TRUCO PARA EL GENERIC ACK (Solo para Debug/TestClient)
-        // Si detectamos que el mensaje viene de tu consola interactiva de pruebas (TestClient),
-        // le respondemos el ACK de inmediato para que veas la confirmación en tu pantalla.
-        // Lo envolvemos en un try-catch por si acaso un nodo real simula este ID y el socket ya está cerrado.
-        try {
-            if (msg.senderId.equalsIgnoreCase("CAMARA_TEST_1") || msg.senderId.contains("CLIENTE")) {
-                Message debugAck = new Message("ACK", nodeId, msg.term, "DEBUG_PROCESADO_OK_" + msg.type);
-                client.write(ByteBuffer.wrap(debugAck.serialize().getBytes(StandardCharsets.UTF_8)));
-            }
-        } catch (IOException e) {
-            // Si el socket ya estaba cerrado por el emisor (comportamiento normal de PeerClient),
-            // se ignora el error en silencio porque la lógica asíncrona de Raft ya se ejecutó arriba.
-        }
     }
     public void shutdown() {
         running = false;
