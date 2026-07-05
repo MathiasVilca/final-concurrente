@@ -8,6 +8,7 @@ import socket
 import threading
 import time
 import tkinter as tk
+import math
 from tkinter import ttk
 
 CLUSTER_HOST = "127.0.0.1"
@@ -155,7 +156,7 @@ class VigilanteApp:
         contenedor.pack(fill=tk.BOTH, expand=True, padx=16, pady=(12, 0))
 
         columnas = ("#", "Camara", "Clasificacion IA", "Fecha / Hora", "Archivo PNG")
-        self.tabla = ttk.Treeview(contenedor, columns=columnas, show="headings", height=9)
+        self.tabla = ttk.Treeview(contenedor, columns=columnas, show="headings", height=6)
 
         estilo = ttk.Style()
         estilo.theme_use("clam")
@@ -307,8 +308,8 @@ class VigilanteApp:
 
         try:
             img = tk.PhotoImage(file=ruta)
-            max_w, max_h = 260, 160
-            factor = max(1, int(max(img.width() / max_w, img.height() / max_h)))
+            max_w, max_h = 500, 350
+            factor = max(1, math.ceil(max(img.width() / max_w, img.height() / max_h)))
             if factor > 1:
                 img = img.subsample(factor, factor)
 
