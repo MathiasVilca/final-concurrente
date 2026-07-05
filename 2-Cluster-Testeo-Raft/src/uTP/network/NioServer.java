@@ -113,6 +113,12 @@ public class NioServer implements Runnable {
         if (msg.type.equals("CLI_REQ")) {
             Message response = new Message("CLI_RES", nodeId, 0, "ACK_RECIBIDO_OK");
             client.write(ByteBuffer.wrap(response.serialize().getBytes(StandardCharsets.UTF_8)));
+        } else {
+            // ➔ ¡ESTO ES LO QUE FALTABA!
+            // Si es VOTE_REQ o cualquier otro tipo de control de Raft, le respondemos un ACK genérico
+            // para que la consola del cliente reciba datos inmediatamente y no de timeout.
+            Message genericAck = new Message("ACK", nodeId, msg.term, "MENSAJE_" + msg.type + "_PROCESADO_OK");
+            client.write(ByteBuffer.wrap(genericAck.serialize().getBytes(StandardCharsets.UTF_8)));
         }
     }
 

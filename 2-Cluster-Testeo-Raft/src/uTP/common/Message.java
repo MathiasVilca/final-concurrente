@@ -21,11 +21,27 @@ public class Message {
     // Deserializa una trama recibida por el socket
     public static Message deserialize(String rawData) {
         try {
-            String[] parts = rawData.trim().split("\\|");
-            if (parts.length < 4) return null;
-            return new Message(parts[0], parts[1], Integer.parseInt(parts[2]), parts[3]);
+            // Dividimos por el delimitador |
+            String[] parts = rawData.split("\\|");
+
+            if (parts.length < 4) {
+                System.err.println("[Error] Faltan delimitadores '|' en la trama: " + rawData);
+                return null;
+            }
+
+            // Aplicamos trim() a CADA pieza para destruir espacios fantasma o \r de Windows
+            String type = parts[0].trim();
+            String senderId = parts[1].trim();
+            int term = Integer.parseInt(parts[2].trim()); // Blindado contra espacios
+            String payload = parts[3].trim();
+
+            return new Message(type, senderId, term, payload);
+
+        } catch (NumberFormatException e) {
+            System.err.println("❌ [Error] El campo TERM no es un número entero válido en: " + rawData);
+            return null;
         } catch (Exception e) {
-            System.err.println("[Error Deserialización]: Mensaje malformado -> " + rawData);
+            System.err.println("❌ [Error Deserialización general]: " + e.getMessage());
             return null;
         }
     }
