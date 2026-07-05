@@ -66,11 +66,11 @@ Funciones:
 
 ### 4. Cliente vigilante  `4-Cliente-Vigilante/`
 
-- `vigilante_app.py` interfaz Tkinter dark-mode.
+- `vigilante_app.py` interfaz Tkinter rediseñada (Dashboard).
+- Monitor Raft superior en tiempo real que hace *pings* para saber qué nodos están UP/DOWN.
 - Consulta el log con `CLI_REQ|CLIENTE_VIGILANTE|0|GET_LOG`.
-- Tabla con columnas: Camara | Clasificacion IA | Fecha/Hora | Imagen.
-- Al seleccionar una fila muestra la captura `.png` generada.
-- Boton Auto-Refresh cada 5 segundos.
+- Panel dividido (Split-View): Tabla de registros a la izquierda y foto en tamaño grande a la derecha.
+- Bounding Boxes: Las imágenes PNG ahora incluyen el marco amarillo y el texto de detección dibujados de forma nativa por el servidor Java.
 
 ## Requisitos
 
@@ -113,34 +113,31 @@ java -cp out uTP.ClusterLauncher
 
 Espera hasta ver el mensaje `[LIDER] [NODE_X] ME CONVIERTO EN EL LIDER`.
 
-### Paso 3 — Lanzar las camaras (Terminal 2)
+### Paso 3 — Abrir el Cliente Vigilante (Terminal 2)
 
-**Opcional - Si quieres usar videos reales (requiere opencv-python):**
 ```powershell
-pip install opencv-python
-cd 3-Emulador-Camaras
-python crear_videos_demo.py
+cd 4-Cliente-Vigilante
+python vigilante_app.py
 ```
-Esto genera 3 archivos MP4 en la carpeta `demo_videos/`.
 
-**Lanzar las cámaras:**
+El Dashboard mostrará el estado de los nodos Raft (Verde = UP, Rojo = DOWN).
+La tabla se auto-actualizará.
+
+### Paso 4 — Lanzar las Cámaras (Terminal 3)
+
+**Opción A: Ejecutar el test completo automatizado con videos reales:**
+(Asegúrate de haber instalado `pip install opencv-python`)
+```powershell
+python test_video_e2e.py
+```
+
+**Opción B: Lanzar cámaras manualmente con videos propios:**
 ```powershell
 cd 3-Emulador-Camaras
 python video_cameras.py
 ```
 
-**Lanzar con videos propios:**
-```powershell
-cd 3-Emulador-Camaras
-python video_cameras.py --auto --frames 5 --fps-delay 1 ^
-  --video1 "C:\videos\perro.mp4" --tipo1 PERRO ^
-  --video2 "C:\videos\gato.mp4"  --tipo2 GATO ^
-  --video3 "C:\videos\auto.mp4"  --tipo3 CARRO
-```
-
-`--tipoN` indica la clase esperada/calibracion de la camara para el modelo de
-centroides. El sistema acepta cualquier MP4 local, extrae frames y guarda el
-PNG real recibido en `2-Cluster-Testeo-Raft/capturas/`.
+`--tipoN` indica la clase esperada/calibración de la cámara para el modelo de centroides. El sistema acepta cualquier MP4 local, extrae frames y el servidor Java los procesará, dibujará el **Bounding Box amarillo**, y guardará el PNG final en `capturas/`.
 
 *Nota: Si no tienes OpenCV, el sistema funcionará automáticamente en "Modo Sintético" generando fotogramas por matemática, por lo que nunca fallará la demostración.*
 
@@ -150,14 +147,7 @@ PNG real recibido en `2-Cluster-Testeo-Raft/capturas/`.
 > exposicion se recomienda usar videos donde cada camara este calibrada como
 > PERRO, GATO o CARRO.
 
-### Paso 4 — Abrir el cliente vigilante (Terminal 3)
-
-```powershell
-cd 4-Cliente-Vigilante
-python vigilante_app.py
-```
-
-Presiona `Refrescar Ahora` para ver la tabla de detecciones.
+> exposición se recomienda usar los videos en `demo_videos` donde cada cámara este calibrada como PERRO, GATO o CARRO.
 Haz clic en una fila para previsualizar la imagen `.png`.
 
 ## Flujo de mensajes
