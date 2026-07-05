@@ -1,177 +1,231 @@
 # Sistema Distribuido con Consenso Raft e Inteligencia Artificial
 
-Este repositorio contiene la implementación final para el examen de **Programación Concurrente y Distribuida**.
+Proyecto final de Programacion Concurrente y Distribuida.
+El sistema simula un cluster distribuido tolerante a fallos que recibe datos
+concurrentes de camaras IP, replica el registro con Raft y clasifica objetos
+con un modelo de IA entrenado previamente.
 
-El sistema simula un clúster distribuido tolerante a fallos que recibe flujos de datos concurrentes de múltiples cámaras IP y los procesa usando un modelo de Inteligencia Artificial basado en distancias matemáticas y centroides.
+## Arquitectura
 
-## Parte 1: Lo que hemos logrado (Días 1 y 2)
-
-**Estado:** Completado
-
-En esta primera mitad del proyecto se construyó toda la infraestructura de red subyacente y la máquina de estados del clúster desde cero, cumpliendo la regla estricta de no usar frameworks ni librerías externas de comunicación:
-
-- Cero REST.
-- Cero gRPC.
-- Cero RabbitMQ.
-
-### 1. Arquitectura de Red Asíncrona (Java NIO)
-
-Para soportar múltiples conexiones concurrentes sin colapsar por bloqueos de I/O, se implementó el paquete `uTP.network`.
-
-#### `NioServer.java`
-
-Utiliza `Selector` y `ServerSocketChannel` en modo no bloqueante. Un solo hilo es capaz de gestionar múltiples conexiones entrantes.
-
-#### `PeerClient.java`
-
-Implementa una arquitectura **Fire-and-Forget** (disparar y olvidar).
-
-Para la comunicación entre nodos, se abre un socket, se envían los bytes y se cierra inmediatamente. Esto previene interbloqueos (*deadlocks*) y tuberías rotas si un nodo se cae inesperadamente.
-
-#### Protocolo custom (`Message.java`)
-
-Como no se usa JSON en Java, se creó un protocolo delimitado por `|` y `\n`.
-
-Ejemplo:
-
-```text
-TIPO|SENDER|TERM|PAYLOAD\n
+```
+CAMARA_N (Python) ──CLI_REQ──► LIDER (Java NIO)
+                                 │
+                    APPEND_ENTRIES│◄─ FOLLOWER_1
+                    APPEND_ENTRIES│◄─ FOLLOWER_2
+                                 │
+                         COMMIT  ▼
+                          WorkerPool (3 hilos)
+                                 │
+                    clasifica con centroides
+                                 │
+                         CLI_RES ▼
+                     ◄────────── CAMARA_N
 ```
 
-También se implementó un analizador (`deserialize`) blindado contra espacios y caracteres corruptos.
+Protocolo de trama: `TIPO|SENDER|TERM|PAYLOAD\n`
 
-### 2. Algoritmo de Consenso Raft (Elección de Líder)
+## Componentes
 
-Ubicado en el paquete `uTP.raft`, el clúster es capaz de organizarse por sí mismo sin intervención humana.
+### 1. Servidor de entrenamiento  `1-Servidor-Entrenamiento/`
 
-#### `RaftController.java`
+- `model_trainer.py` calcula centroides para tres clases: `PERRO`, `GATO` y `CARRO`.
+- Genera `pesos_ia.json` con los centroides.
+- Solo usa librerias estandar de Python.
 
-Es el cerebro de cada nodo. Administra los 3 estados fundamentales:
+```powershell
+cd 1-Servidor-Entrenamiento
+python model_trainer.py
+```
 
-- `FOLLOWER`
-- `CANDIDATE`
-- `LEADER`
+### 2. Cluster con Raft  `2-Cluster-Testeo-Raft/`
 
-#### Temporizadores aleatorios
+Tres nodos Java en puertos `8001`, `8002` y `8003`.
 
-Cada seguidor espera entre `1500 ms` y `3000 ms`. Si no recibe noticias, inicia una elección.
+Funciones:
+- Servidor TCP no bloqueante con Java NIO y `Selector`.
+- Eleccion de lider: estados `FOLLOWER`, `CANDIDATE` y `LEADER`.
+- Heartbeats periodicos cada 800 ms.
+- Replicacion con `APPEND_ENTRIES` / confirmacion `APPEND_ACK`.
+- Worker pool de 3 hilos (`ExecutorService`) para clasificacion paralela.
+- Capturas `.png` por deteccion en `capturas/`: si la camara envia un frame real
+  se guarda ese frame; si no hay video/OpenCV se genera una imagen sintetica.
+- Log replicado consultable con `GET_LOG`.
 
-#### Heartbeats (latidos)
+### 3. Emulador de camaras con Video `3-Emulador-Camaras/`
 
-El nodo que gana la elección asume el rol de líder y envía latidos a los seguidores cada `800 ms` para mantener el liderazgo.
+- `video_cameras.py` simula cámaras procesando fotogramas de video.
+- Soporta 2 modos:
+  - **Video real:** Lee MP4 usando OpenCV y extrae características de cada frame.
+  - **Modo sintético:** Si no hay OpenCV, genera fotogramas matemáticamente.
+- Soporta videos personalizados por camara con `--video1`, `--video2`, `--video3`
+  y calibracion de clase con `--tipo1`, `--tipo2`, `--tipo3`.
+- `crear_videos_demo.py` genera 3 videos MP4 de prueba usando OpenCV.
+- Cada cámara envía los fotogramas en tiempo real al clúster Java.
+- El payload puede incluir imagen real: `color,aspecto,textura##IMG##frame_png_base64`.
+- Maneja reconexión `REDIRECT` si falla el líder Raft.
 
-#### Tolerancia a fallos certificada
+### 4. Cliente vigilante  `4-Cliente-Vigilante/`
 
-Si el líder actual muere o se desconecta, los seguidores detectan el silencio en la red y automáticamente inician una nueva elección, elevando el `TERM` (mandato) para elegir un nuevo líder.
+- `vigilante_app.py` interfaz Tkinter dark-mode.
+- Consulta el log con `CLI_REQ|CLIENTE_VIGILANTE|0|GET_LOG`.
+- Tabla con columnas: Camara | Clasificacion IA | Fecha/Hora | Imagen.
+- Al seleccionar una fila muestra la captura `.png` generada.
+- Boton Auto-Refresh cada 5 segundos.
 
-### 3. Modelo de IA Distribuido (Python Puro)
+## Requisitos
 
-En la carpeta `1-Servidor-Entrenamiento`:
+- Java 8 o superior (probado con Java 21).
+- Python 3.7 o superior.
+- Sin internet. Sin librerias externas (no REST, no gRPC, no WebSocket, no RabbitMQ).
 
-#### `model_trainer.py`
+## Ejecucion completa paso a paso
 
-Simula el entrenamiento de Machine Learning calculando los centroides de un dataset:
+### Paso 0 — Entrenar el modelo (solo una vez)
 
-- `PERRO`
-- `GATO`
-- `CARRO`
+```powershell
+cd 1-Servidor-Entrenamiento
+python model_trainer.py
+```
 
-Exporta los pesos a un archivo `pesos_ia.json` usando solo librerías estándar.
+Genera `pesos_ia.json` con los centroides de PERRO, GATO y CARRO.
 
-## Parte 2: Días 3 y 4 — COMPLETADO ✅
+### Paso 1 — Compilar Java
 
-### Nuevos componentes implementados
+**PowerShell:**
+```powershell
+cd 2-Cluster-Testeo-Raft
+$files = Get-ChildItem -Recurse -Filter "*.java" -Path "src" | Select-Object -ExpandProperty FullName
+javac -encoding UTF-8 -sourcepath src -d out $files
+```
 
-#### `uTP/workers/WorkerPool.java`
-- `ExecutorService` con **pool fijo de 3 hilos** (`Worker-IA-*`)
-- Cada `WorkerTask` parsea el vector `[color, aspecto, textura]`, carga `pesos_ia.json` y calcula la **distancia euclidiana** al centroide más cercano
-- Guarda el resultado en `WorkerPool.resultLog` (`ConcurrentLinkedQueue<String>`) — log global concurrente
-- Responde `CLI_RES|NODO|0|CLASIFICACION` a la cámara cuando termina
-
-#### `uTP/raft/RaftController.java` — Día 3 (Replicación de Log)
-- **`APPEND_ENTRIES`**: el líder envía el payload a todos los followers para replicar
-- **`APPEND_ACK`**: el follower confirma. Al recibir la mayoría (≥ 1 follower = 2/3 nodos), el dato queda **committed**
-- **`handleExternalRequest()`**: punto de entrada para peticiones externas del NioServer
-- **`getLogAsString()`**: serializa el log para el Cliente Vigilante
-
-#### `uTP/network/NioServer.java` — Día 3 (Integración)
-- `CLI_REQ` con payload `GET_LOG` → responde el log completo al Cliente Vigilante
-- `CLI_REQ` normal → si es líder, llama a `RaftController.handleExternalRequest()`. Si no, envía `REDIRECT`
-- Buffer aumentado a **64KB** para soportar payloads grandes
-
-#### `3-Emulador-Camaras/camera_client.py` — Día 3
-- **3 hilos** Python simultáneos (1 por cámara)
-- Cada cámara envía 3 vectores al clúster con 3s de pausa
-- Maneja timeout, REDIRECT y reconexión
-
-#### `4-Cliente-Vigilante/vigilante_app.py` — Día 4
-- UI Tkinter dark-mode con tabla de resultados
-- Columnas: `Cámara | Clasificación IA | Fecha/Hora`
-- Botón **Refrescar Ahora** y **Auto-Refresh** configurable (cada 5s)
-- Colores por clasificación: PERRO=verde, GATO=azul, CARRO=naranja
-
----
-
-## Cómo ejecutar el sistema completo
-
-### 1. Compilar el proyecto Java (una sola vez)
-
+**Linux / macOS / Git Bash:**
 ```bash
 cd 2-Cluster-Testeo-Raft
 javac -encoding UTF-8 -sourcepath src -d out $(find src -name "*.java")
-# En PowerShell:
-# $files = Get-ChildItem -Recurse -Filter "*.java" -Path "src" | Select-Object -ExpandProperty FullName
-# javac -encoding UTF-8 -sourcepath src -d out $files
 ```
 
-### 2. Levantar el clúster (Terminal 1)
+### Paso 2 — Levantar el cluster (Terminal 1)
 
-En IntelliJ: ejecutar `uTP/ClusterLauncher.java`
-
-O desde consola:
-```bash
+```powershell
 cd 2-Cluster-Testeo-Raft
 java -cp out uTP.ClusterLauncher
 ```
 
-Verás los 3 nodos arrancar y elegir un LÍDER automáticamente.
+Espera hasta ver el mensaje `[LIDER] [NODE_X] ME CONVIERTO EN EL LIDER`.
 
-### 3. Lanzar las cámaras (Terminal 2)
+### Paso 3 — Lanzar las camaras (Terminal 2)
 
-```bash
+**Opcional - Si quieres usar videos reales (requiere opencv-python):**
+```powershell
+pip install opencv-python
 cd 3-Emulador-Camaras
-python camera_client.py
+python crear_videos_demo.py
+```
+Esto genera 3 archivos MP4 en la carpeta `demo_videos/`.
+
+**Lanzar las cámaras:**
+```powershell
+cd 3-Emulador-Camaras
+python video_cameras.py
 ```
 
-Presiona ENTER cuando lo pida. Las 3 cámaras enviarán sus vectores concurrentemente.
+**Lanzar con videos propios:**
+```powershell
+cd 3-Emulador-Camaras
+python video_cameras.py --auto --frames 5 --fps-delay 1 ^
+  --video1 "C:\videos\perro.mp4" --tipo1 PERRO ^
+  --video2 "C:\videos\gato.mp4"  --tipo2 GATO ^
+  --video3 "C:\videos\auto.mp4"  --tipo3 CARRO
+```
 
-### 4. Abrir el Cliente Vigilante (Terminal 3)
+`--tipoN` indica la clase esperada/calibracion de la camara para el modelo de
+centroides. El sistema acepta cualquier MP4 local, extrae frames y guarda el
+PNG real recibido en `2-Cluster-Testeo-Raft/capturas/`.
 
-```bash
+*Nota: Si no tienes OpenCV, el sistema funcionará automáticamente en "Modo Sintético" generando fotogramas por matemática, por lo que nunca fallará la demostración.*
+
+> Importante: este proyecto usa un modelo academico simple de centroides con
+> caracteristicas `[color_promedio, aspecto, textura]`. Por eso puede procesar
+> cualquier MP4, pero no es un detector visual universal tipo YOLO/CNN. Para la
+> exposicion se recomienda usar videos donde cada camara este calibrada como
+> PERRO, GATO o CARRO.
+
+### Paso 4 — Abrir el cliente vigilante (Terminal 3)
+
+```powershell
 cd 4-Cliente-Vigilante
 python vigilante_app.py
 ```
 
-Presiona **Refrescar Ahora** para ver la tabla de clasificaciones.
+Presiona `Refrescar Ahora` para ver la tabla de detecciones.
+Haz clic en una fila para previsualizar la imagen `.png`.
 
-### 5. Demo de Tolerancia a Fallos (para el profesor)
-
-En `ClusterLauncher.java`, descomenta el bloque `/* */` del final.  
-El Nodo 1 morirá a los 15s y los otros dos elegirán un nuevo líder en < 3s.
-
----
-
-## Flujo completo del mensaje (Protocolo)
+## Flujo de mensajes
 
 ```
-CAMARA_N  →[CLI_REQ|CAMARA_N|0|125,1.25,48\n]→  LEADER:8001
-LEADER    →[APPEND_ENTRIES|NODE_1|term|0:CAMARA_N:125,1.25,48\n]→  NODE_2, NODE_3
-NODE_2    →[APPEND_ACK|NODE_2|term|0\n]→  LEADER
-LEADER    → commit → WorkerPool (hilo Worker-IA)
-Worker    → distancia euclidiana → "PERRO"
-Worker    →[CLI_RES|NODE_1|0|PERRO\n]→  CAMARA_N
-
-CLIENTE_VIGILANTE  →[CLI_REQ|CLIENTE_VIGILANTE|0|GET_LOG\n]→  ANY_NODE
-ANY_NODE           →[CLI_RES|NODE_X|0|CAMARA_1 | PERRO | 2026-07-04 23:10:05;...\n]
+CAMARA_N  ->  CLI_REQ|CAMARA_N|0|118,1.22,47##IMG##iVBORw0KGgo...
+LIDER     ->  APPEND_ENTRIES|NODE_1|term|0:CAMARA_N:118,1.22,47##IMG##iVBORw0KGgo...
+FOLLOWER  ->  APPEND_ACK|NODE_2|term|0
+LIDER     ->  commit -> WorkerPool -> separa vector/imagen -> clasifica -> guarda .png
+WORKER    ->  CLI_RES|NODE_1|0|PERRO
 ```
 
+```
+CLIENTE_VIGILANTE  ->  CLI_REQ|CLIENTE_VIGILANTE|0|GET_LOG
+NODO               ->  CLI_RES|NODE_X|0|CAMARA_1 | PERRO | 2026-07-05 02:36:11 | ruta.png;...
+```
+
+## Prueba automatica end-to-end
+
+Ejecutar desde la raiz del proyecto:
+
+```powershell
+python test_e2e.py
+```
+
+Resultado esperado:
+
+```
+[OK] CAMARA_1: CLI_RES|NODE_1|0|PERRO
+[OK] CAMARA_2: CLI_RES|NODE_1|0|GATO
+[OK] CAMARA_3: CLI_RES|NODE_1|0|CARRO
+TODO EL SISTEMA FUNCIONA CORRECTAMENTE.
+```
+
+## Test unitario del parser de IA
+
+```powershell
+cd 2-Cluster-Testeo-Raft
+java -cp out uTP.workers.WorkerPoolParserTest
+```
+
+Resultado esperado: `Parser de pesos OK`
+
+## Tolerancia a fallos — Demo para el profesor
+
+Descomenta el bloque al final de `ClusterLauncher.java` antes de presentar:
+
+```java
+// Esto mata NODE_1 a los 15s para demostrar re-eleccion
+try {
+    Thread.sleep(15000);
+    System.out.println("[DEMO] MATANDO NODO 1 PARA PROBAR RAFT");
+    nodo1.shutdown();
+} catch (InterruptedException e) { e.printStackTrace(); }
+```
+
+Los dos nodos restantes detectan la ausencia de heartbeats y eligen un nuevo
+lider en menos de 3 segundos. El sistema sigue respondiendo a las camaras.
+
+## Despliegue en red LAN (2 laptops)
+
+En `2-Cluster-Testeo-Raft/src/uTP/raft/RaftConfig.java` cambia `"127.0.0.1"`
+por las IPs reales de las laptops y redistribuye los nodos.
+
+## Archivos generados en ejecucion
+
+| Ruta | Descripcion |
+|------|-------------|
+| `2-Cluster-Testeo-Raft/out/` | Clases Java compiladas |
+| `2-Cluster-Testeo-Raft/capturas/` | Imagenes `.png` por deteccion |
+| `1-Servidor-Entrenamiento/pesos_ia.json` | Centroides del modelo de IA |

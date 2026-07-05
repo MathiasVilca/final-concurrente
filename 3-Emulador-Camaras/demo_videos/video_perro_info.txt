@@ -1,0 +1,5 @@
+Video simulado para PERRO
+Color base: 120
+Aspecto base: 1.2
+Textura base: 45
+Reemplaza este archivo con un MP4 real del mismo nombre.

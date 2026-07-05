@@ -11,3 +11,7 @@ out/
 __pycache__/
 *.pyc
 *.pyo
+capturas/
+2-Cluster-Testeo-Raft/capturas/
+cluster-test-*.log
+.venv/

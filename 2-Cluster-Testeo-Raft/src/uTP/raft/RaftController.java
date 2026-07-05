@@ -5,7 +5,9 @@ import uTP.network.PeerClient;
 import uTP.workers.WorkerPool;
 
 import java.nio.channels.SocketChannel;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -112,7 +114,7 @@ public class RaftController {
         votedFor = nodeId;
         votesReceived = 1;
         currentLeader = null;
-        System.out.println("⚠️ [" + nodeId + "] Timeout! Iniciando elección para el término: " + currentTerm);
+        System.out.println("[TIMEOUT] [" + nodeId + "] Iniciando eleccion para el termino: " + currentTerm);
         resetElectionTimer();
         Message voteReq = new Message("VOTE_REQ", nodeId, currentTerm, "QUIERO_SER_LIDER");
         broadcast(voteReq);
@@ -122,7 +124,7 @@ public class RaftController {
         if (state == NodeState.LEADER) return;
         state = NodeState.LEADER;
         currentLeader = nodeId;
-        System.out.println("👑 [" + nodeId + "] ¡ME CONVIERTO EN EL LÍDER DEL TÉRMINO " + currentTerm + "! 👑");
+        System.out.println("[LIDER] [" + nodeId + "] ME CONVIERTO EN EL LIDER DEL TERMINO " + currentTerm + "!");
         startHeartbeatTimer();
     }
 
@@ -160,10 +162,10 @@ public class RaftController {
                 if ((votedFor == null || votedFor.equals(msg.senderId)) && msg.term >= currentTerm) {
                     votedFor = msg.senderId;
                     resetElectionTimer();
-                    System.out.println("🗳️ [" + nodeId + "] Voto CONCEDIDO a " + msg.senderId + " para el término " + msg.term);
+                    System.out.println("[VOTO OK] [" + nodeId + "] Voto CONCEDIDO a " + msg.senderId + " para el termino " + msg.term);
                     PeerClient.sendAsync("127.0.0.1", puertoCandidato, new Message("VOTE_RES", nodeId, currentTerm, "TRUE"));
                 } else {
-                    System.out.println("❌ [" + nodeId + "] Voto DENEGADO a " + msg.senderId);
+                    System.out.println("[VOTO NO] [" + nodeId + "] Voto DENEGADO a " + msg.senderId);
                     PeerClient.sendAsync("127.0.0.1", puertoCandidato, new Message("VOTE_RES", nodeId, currentTerm, "FALSE"));
                 }
                 break;
@@ -171,7 +173,7 @@ public class RaftController {
             case "VOTE_RES":
                 if (state == NodeState.CANDIDATE && msg.payload.equals("TRUE") && msg.term == currentTerm) {
                     votesReceived++;
-                    System.out.println("📈 [" + nodeId + "] Voto recibido de " + msg.senderId + ". Total: " + votesReceived + "/3");
+                    System.out.println("[VOTO+] [" + nodeId + "] Voto recibido de " + msg.senderId + ". Total: " + votesReceived + "/3");
                     if (votesReceived > RaftConfig.PEERS.size() / 2) {
                         becomeLeader();
                     }
@@ -199,7 +201,7 @@ public class RaftController {
                         while (commitLog.size() <= idx) commitLog.add(null);
                         commitLog.set(idx, entrada);
 
-                        System.out.println("[" + nodeId + "] 📋 APPEND_ENTRIES recibido. Log[" + idx + "]=" + entrada);
+                        System.out.println("[APPEND] [" + nodeId + "] APPEND_ENTRIES recibido. Log[" + idx + "]=" + entrada);
 
                         // Responder APPEND_ACK al líder
                         Integer puertoLider = RaftConfig.PEERS.get(msg.senderId);
@@ -220,12 +222,38 @@ public class RaftController {
                 if (state == NodeState.LEADER) {
                     int idx = Integer.parseInt(msg.payload.trim());
                     int acksActuales = appendAcks.merge(idx, 1, Integer::sum);
-                    System.out.println("[" + nodeId + "] 📨 APPEND_ACK recibido de " + msg.senderId
+                    System.out.println("[ACK] [" + nodeId + "] APPEND_ACK recibido de " + msg.senderId
                             + " para idx=" + idx + " (total ACKs=" + acksActuales + ")");
 
                     // Mayoría = 2 de 3 (el líder ya contó como 1 implícito)
                     if (acksActuales >= 1) { // 1 follower ACK + líder = mayoría en clúster 3 nodos
                         commitEntry(idx);
+                    }
+                }
+                break;
+
+            case "COMMIT_ENTRY":
+                /*
+                 * El FOLLOWER recibe la confirmacion de commit del lider.
+                 * Payload: "indice::senderId_original::timestamp::vector".
+                 * En este punto la entrada ya alcanzo mayoria, por eso cada
+                 * nodo aplica la misma operacion en su maquina de estado local,
+                 * pero solo el lider guarda el archivo PNG para no duplicar imagenes.
+                 */
+                if (msg.term >= currentTerm) {
+                    currentLeader = msg.senderId;
+                    stepDown(msg.term);
+
+                    String[] partes = msg.payload.split("::", 4);
+                    if (partes.length == 4) {
+                        int idx = Integer.parseInt(partes[0].trim());
+                        String senderIdCamara = partes[1].trim();
+                        String timestamp = partes[2].trim();
+                        String vectorPayload = partes[3].trim();
+                        if (!committedIndices.add(idx)) {
+                            return;
+                        }
+                        applyCommittedEntry(idx, senderIdCamara, vectorPayload, timestamp, false, null);
                     }
                 }
                 break;
@@ -253,7 +281,7 @@ public class RaftController {
     public synchronized void handleExternalRequest(String senderId, String payload, SocketChannel client) {
         if (state != NodeState.LEADER) {
             // Redirigir al líder (simplificado: avisamos a la cámara)
-            System.out.println("[" + nodeId + "] 🔀 No soy el líder. Ignorando petición de " + senderId);
+            System.out.println("[REDIR] [" + nodeId + "] No soy el lider. Ignorando peticion de " + senderId);
             return;
         }
 
@@ -266,7 +294,7 @@ public class RaftController {
         pendingEntries.put(idx, new String[]{senderId, payload});
         appendAcks.put(idx, 0);
 
-        System.out.println("[" + nodeId + "] 📤 Replicando entrada[" + idx + "] de " + senderId + ": " + payload);
+        System.out.println("[REPLIC] [" + nodeId + "] Replicando entrada[" + idx + "] de " + senderId + ": " + payload);
 
         // Enviar APPEND_ENTRIES a los followers
         String appendPayload = idx + ":" + senderId + ":" + payload;
@@ -278,14 +306,7 @@ public class RaftController {
      * Construye el log como String para responder al Cliente Vigilante.
      */
     public synchronized String getLogAsString() {
-        if (commitLog.isEmpty() && WorkerPool.resultLog.isEmpty()) {
-            return "LOG_VACIO";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (String entry : WorkerPool.resultLog) {
-            if (entry != null) sb.append(entry).append(";");
-        }
-        return sb.length() > 0 ? sb.toString() : "LOG_VACIO";
+        return workerPool.getResultLogAsString();
     }
 
     // ─────────────────────────────────────────────────────
@@ -305,16 +326,36 @@ public class RaftController {
 
         String senderIdCamara = entry[0];
         String vectorPayload  = entry[1];
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
 
+        // Solo el lider crea el PNG fisico. Los followers registran la misma
+        // ruta consensuada, evitando imagenes repetidas por cada nodo Raft.
+        applyCommittedEntry(idx, senderIdCamara, vectorPayload, timestamp, true, ch);
+
+        // Avisar a los followers que la entrada ya fue comprometida y debe
+        // aplicarse a la maquina de estado local de cada nodo.
+        String commitPayload = idx + "::" + senderIdCamara + "::" + timestamp + "::" + vectorPayload;
+        Message commit = new Message("COMMIT_ENTRY", nodeId, currentTerm, commitPayload);
+        broadcast(commit);
+    }
+
+    private void applyCommittedEntry(
+            int idx,
+            String senderIdCamara,
+            String vectorPayload,
+            String timestamp,
+            boolean guardarImagen,
+            SocketChannel ch
+    ) {
         // Guardar en log local
         String logEntry = senderIdCamara + "|" + vectorPayload;
         while (commitLog.size() <= idx) commitLog.add(null);
         commitLog.set(idx, logEntry);
 
-        System.out.println("[" + nodeId + "] ✔️ COMMITTED idx=" + idx + ": " + logEntry);
+        System.out.println("[COMMIT] [" + nodeId + "] APLICANDO idx=" + idx + ": " + logEntry);
 
         // Delegar al WorkerPool para clasificar con IA (hilo separado)
-        workerPool.submitTask(nodeId, senderIdCamara, vectorPayload, ch);
+        workerPool.submitTask(nodeId, idx, senderIdCamara, vectorPayload, timestamp, guardarImagen, ch);
     }
 
     // ─────────────────────────────────────────────────────
@@ -350,6 +391,6 @@ public class RaftController {
     public void stopRaft() {
         if (timer != null) { timer.cancel(); timer.purge(); }
         workerPool.shutdown();
-        System.out.println("💀 [" + nodeId + "] Controlador Raft apagado.");
+        System.out.println("[STOP] [" + nodeId + "] Controlador Raft apagado.");
     }
 }

@@ -1,0 +1,5 @@
+Video simulado para GATO
+Color base: 90
+Aspecto base: 0.9
+Textura base: 70
+Reemplaza este archivo con un MP4 real del mismo nombre.

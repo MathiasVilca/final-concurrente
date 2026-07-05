@@ -1,14 +1,13 @@
+# -*- coding: utf-8 -*-
 """
-camaras.py — Alias de camera_client.py
-Mencionado en el README y el plan de batalla como nombre alternativo.
+camaras.py — alias de camera_client.py
+Mencionado en el README como nombre alternativo.
 """
-from camera_client import *
+import runpy
+import sys
+import os
 
 if __name__ == "__main__":
-    import camera_client
-    camera_client.hilo_camara  # ya importado
-
-    # Reutilizar el main de camera_client
-    import sys, os
-    sys.argv = [sys.argv[0]]
-    exec(open(os.path.join(os.path.dirname(__file__), "camera_client.py")).read())
+    sys.argv = [sys.argv[0]] + [a for a in sys.argv[1:]]
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    runpy.run_path(os.path.join(script_dir, "camera_client.py"), run_name="__main__")

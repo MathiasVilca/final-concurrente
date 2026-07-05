@@ -1,0 +1,5 @@
+Video simulado para CARRO
+Color base: 200
+Aspecto base: 2.5
+Textura base: 15
+Reemplaza este archivo con un MP4 real del mismo nombre.

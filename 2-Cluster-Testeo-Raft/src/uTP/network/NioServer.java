@@ -38,7 +38,7 @@ public class NioServer implements Runnable {
 
             // 2. Bucle principal de selección
             while (running) {
-                selector.select(); // Espera eventos de red
+                selector.select(300); // timeout 300ms: el selector no bloquea indefinidamente
                 Iterator<SelectionKey> keys = selector.selectedKeys().iterator();
 
                 while (keys.hasNext()) {
@@ -142,7 +142,7 @@ public class NioServer implements Runnable {
                 // No soy el líder: avisar a la cámara que se reconecte al líder
                 String lider = raftController.getLeaderId();
                 String info  = (lider != null) ? "LIDER_ES:" + lider : "SIN_LIDER";
-                System.out.println("[" + nodeId + "] 🔀 No soy líder. Redirigiendo " + msg.senderId + " → " + info);
+                System.out.println("[" + nodeId + "] [REDIR] No soy lider. Redirigiendo " + msg.senderId + " -> " + info);
                 Message redir = new Message("REDIRECT", nodeId, 0, info);
                 try {
                     client.write(ByteBuffer.wrap(redir.serialize().getBytes(StandardCharsets.UTF_8)));
