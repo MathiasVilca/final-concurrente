@@ -2,6 +2,7 @@ package uTP.network;
 
 import uTP.common.Message;
 import uTP.raft.RaftController;
+import uTP.raft.RaftConfig;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -31,10 +32,10 @@ public class NioServer implements Runnable {
             selector = Selector.open();
             serverChannel = ServerSocketChannel.open();
             serverChannel.configureBlocking(false); // Modo NO BLOQUEANTE obligado
-            serverChannel.bind(new InetSocketAddress(port));
+            serverChannel.bind(new InetSocketAddress(RaftConfig.LISTEN_HOST, port));
             serverChannel.register(selector, SelectionKey.OP_ACCEPT);
 
-            System.out.println("[" + nodeId + "] Servidor NIO iniciado en el puerto: " + port);
+            System.out.println("[" + nodeId + "] Servidor NIO iniciado en " + RaftConfig.LISTEN_HOST + ":" + port);
 
             // 2. Bucle principal de selección
             while (running) {
@@ -167,6 +168,14 @@ public class NioServer implements Runnable {
         if (raftController != null) {
             raftController.stopRaft();
         }
+    }
+
+    public boolean isLeader() {
+        return raftController != null && raftController.isLeader();
+    }
+
+    public String getNodeId() {
+        return nodeId;
     }
 }
 

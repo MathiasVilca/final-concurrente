@@ -163,10 +163,10 @@ public class RaftController {
                     votedFor = msg.senderId;
                     resetElectionTimer();
                     System.out.println("[VOTO OK] [" + nodeId + "] Voto CONCEDIDO a " + msg.senderId + " para el termino " + msg.term);
-                    PeerClient.sendAsync("127.0.0.1", puertoCandidato, new Message("VOTE_RES", nodeId, currentTerm, "TRUE"));
+                    PeerClient.sendAsync(RaftConfig.hostFor(msg.senderId), puertoCandidato, new Message("VOTE_RES", nodeId, currentTerm, "TRUE"));
                 } else {
                     System.out.println("[VOTO NO] [" + nodeId + "] Voto DENEGADO a " + msg.senderId);
-                    PeerClient.sendAsync("127.0.0.1", puertoCandidato, new Message("VOTE_RES", nodeId, currentTerm, "FALSE"));
+                    PeerClient.sendAsync(RaftConfig.hostFor(msg.senderId), puertoCandidato, new Message("VOTE_RES", nodeId, currentTerm, "FALSE"));
                 }
                 break;
 
@@ -207,7 +207,7 @@ public class RaftController {
                         Integer puertoLider = RaftConfig.PEERS.get(msg.senderId);
                         if (puertoLider != null) {
                             Message ack = new Message("APPEND_ACK", nodeId, currentTerm, String.valueOf(idx));
-                            PeerClient.sendAsync("127.0.0.1", puertoLider, ack);
+                            PeerClient.sendAsync(RaftConfig.hostFor(msg.senderId), puertoLider, ack);
                         }
                     }
                 }
@@ -365,7 +365,7 @@ public class RaftController {
     private void broadcast(Message msg) {
         for (Map.Entry<String, Integer> peer : RaftConfig.PEERS.entrySet()) {
             if (!peer.getKey().equals(nodeId)) {
-                PeerClient.sendAsync("127.0.0.1", peer.getValue(), msg);
+                PeerClient.sendAsync(RaftConfig.hostFor(peer.getKey()), peer.getValue(), msg);
             }
         }
     }

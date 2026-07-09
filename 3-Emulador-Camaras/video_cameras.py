@@ -50,9 +50,14 @@ if hasattr(sys.stderr, "reconfigure"):
 # --------------------------------------------------------------------------- #
 # Configuracion del cluster
 # --------------------------------------------------------------------------- #
-CLUSTER_HOST  = "127.0.0.1"
+CLUSTER_HOST  = os.environ.get("CLUSTER_HOST", "127.0.0.1")
 CLUSTER_PORTS = [8001, 8002, 8003]
 NODES         = {"NODE_1": 8001, "NODE_2": 8002, "NODE_3": 8003}
+NODE_HOSTS    = {
+    "NODE_1": os.environ.get("CLUSTER_NODE_1_HOST", CLUSTER_HOST),
+    "NODE_2": os.environ.get("CLUSTER_NODE_2_HOST", CLUSTER_HOST),
+    "NODE_3": os.environ.get("CLUSTER_NODE_3_HOST", CLUSTER_HOST),
+}
 
 # Directorio de videos de ejemplo
 VIDEOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "demo_videos")
@@ -92,6 +97,7 @@ def construir_parser_argumentos():
     )
     parser.add_argument("--sintetico", action="store_true", help="No usar OpenCV/video; generar frames matematicos.")
     parser.add_argument("--auto", action="store_true", help="Iniciar sin pedir ENTER.")
+    parser.add_argument("--host", default=None, help="IP/host del cluster cuando todos los nodos estan en la misma maquina.")
     parser.add_argument("--frames", type=int, default=None, help="Cantidad de frames a enviar por cada camara.")
     parser.add_argument("--fps-delay", type=float, default=None, help="Pausa en segundos entre frames por camara.")
 
@@ -233,16 +239,18 @@ def enviar_al_cluster(camara_id, vector, imagen_b64=""):
         payload += "##IMG##" + imagen_b64
     trama   = f"CLI_REQ|{camara_id}|0|{payload}\n"
 
-    intentados, cola = set(), list(CLUSTER_PORTS)
+    endpoints = [(NODE_HOSTS[node], port) for node, port in NODES.items()]
+    intentados, cola = set(), list(endpoints)
     while cola:
-        p = cola.pop(0)
-        if p in intentados:
+        host, p = cola.pop(0)
+        endpoint = (host, p)
+        if endpoint in intentados:
             continue
-        intentados.add(p)
+        intentados.add(endpoint)
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(5)
-            s.connect((CLUSTER_HOST, p))
+            s.connect((host, p))
             s.sendall(trama.encode("utf-8"))
             s.settimeout(20)
             raw = b""
@@ -259,8 +267,9 @@ def enviar_al_cluster(camara_id, vector, imagen_b64=""):
                 if len(partes) >= 4 and "LIDER_ES:" in partes[3]:
                     lider = partes[3].replace("LIDER_ES:", "")
                     pp = NODES.get(lider)
-                    if pp and pp not in intentados:
-                        cola.insert(0, pp)
+                    hh = NODE_HOSTS.get(lider, CLUSTER_HOST)
+                    if pp and (hh, pp) not in intentados:
+                        cola.insert(0, (hh, pp))
                 continue
 
             return resp   # CLI_RES|NODE_X|0|CLASE
@@ -396,7 +405,11 @@ def crear_videos_sinteticos(config=None):
 # =========================================================================== #
 
 def main():
+    global CLUSTER_HOST, NODE_HOSTS
     args = construir_parser_argumentos().parse_args()
+    if args.host:
+        CLUSTER_HOST = args.host
+        NODE_HOSTS = {node: args.host for node in NODES}
     camaras_config = aplicar_argumentos_a_camaras(args)
 
     modo_sintetico = args.sintetico

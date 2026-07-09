@@ -11,8 +11,14 @@ import tkinter as tk
 import math
 from tkinter import ttk
 
-CLUSTER_HOST = "127.0.0.1"
+CLUSTER_HOST = os.environ.get("CLUSTER_HOST", "127.0.0.1")
 CLUSTER_PORTS = [8001, 8002, 8003]
+NODES = {"NODE_1": 8001, "NODE_2": 8002, "NODE_3": 8003}
+NODE_HOSTS = {
+    "NODE_1": os.environ.get("CLUSTER_NODE_1_HOST", CLUSTER_HOST),
+    "NODE_2": os.environ.get("CLUSTER_NODE_2_HOST", CLUSTER_HOST),
+    "NODE_3": os.environ.get("CLUSTER_NODE_3_HOST", CLUSTER_HOST),
+}
 INTERVALO_REFRESCO = 5
 
 COLORES_CLASE = {
@@ -26,11 +32,12 @@ COLORES_CLASE = {
 def pedir_log_al_cluster(timeout=5):
     trama = "CLI_REQ|CLIENTE_VIGILANTE|0|GET_LOG\n"
 
-    for puerto in CLUSTER_PORTS:
+    for node_id, puerto in NODES.items():
+        host = NODE_HOSTS.get(node_id, CLUSTER_HOST)
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(timeout)
-                s.connect((CLUSTER_HOST, puerto))
+                s.connect((host, puerto))
                 s.sendall(trama.encode("utf-8"))
 
                 respuesta_raw = b""
@@ -44,10 +51,11 @@ def pedir_log_al_cluster(timeout=5):
                 partes = respuesta.split("|", 3)
                 if len(partes) == 4 and partes[0] == "CLI_RES":
                     payload = partes[3]
+                    nodo_respuesta = f"{partes[1]} ({host}:{puerto})"
                     if payload == "LOG_VACIO":
-                        return [], partes[1]
+                        return [], nodo_respuesta
                     entradas = [e.strip() for e in payload.split(";") if e.strip()]
-                    return entradas, partes[1]
+                    return entradas, nodo_respuesta
         except Exception:
             continue
 

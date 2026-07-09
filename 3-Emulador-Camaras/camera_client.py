@@ -30,8 +30,14 @@ if hasattr(sys.stderr, "reconfigure"):
 # ─────────────────────────────────────────────────────────────────────
 #  CONFIGURACION
 # ─────────────────────────────────────────────────────────────────────
-CLUSTER_HOST  = "127.0.0.1"
+CLUSTER_HOST  = os.environ.get("CLUSTER_HOST", "127.0.0.1")
 CLUSTER_PORTS = [8001, 8002, 8003]   # Intentara conectar al lider
+NODES         = {"NODE_1": 8001, "NODE_2": 8002, "NODE_3": 8003}
+NODE_HOSTS    = {
+    "NODE_1": os.environ.get("CLUSTER_NODE_1_HOST", CLUSTER_HOST),
+    "NODE_2": os.environ.get("CLUSTER_NODE_2_HOST", CLUSTER_HOST),
+    "NODE_3": os.environ.get("CLUSTER_NODE_3_HOST", CLUSTER_HOST),
+}
 NUM_FOTOS     = 3                    # Fotos por camara
 PAUSA_FOTOS   = 3                    # Segundos entre fotos
 
@@ -67,20 +73,21 @@ def enviar_y_recibir(camara_id, foto_num, vector):
     trama   = f"CLI_REQ|{camara_id}|0|{payload}\n"
 
     # Probar todos los puertos hasta encontrar al lider
-    puertos_intentados = set()
-    puertos_a_probar   = list(CLUSTER_PORTS)
+    intentados = set()
+    endpoints_a_probar = [(NODE_HOSTS[node], port) for node, port in NODES.items()]
 
-    while puertos_a_probar:
-        puerto = puertos_a_probar.pop(0)
-        if puerto in puertos_intentados:
+    while endpoints_a_probar:
+        host, puerto = endpoints_a_probar.pop(0)
+        endpoint = (host, puerto)
+        if endpoint in intentados:
             continue
-        puertos_intentados.add(puerto)
+        intentados.add(endpoint)
 
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
-            sock.connect((CLUSTER_HOST, puerto))
-            print(f"[{camara_id}] Foto {foto_num} -> enviando a puerto {puerto}: {payload}")
+            sock.connect((host, puerto))
+            print(f"[{camara_id}] Foto {foto_num} -> enviando a {host}:{puerto}: {payload}")
             sock.sendall(trama.encode("utf-8"))
 
             # Esperar respuesta completa (hasta \n) — 20s para dar tiempo al WorkerPool
@@ -97,10 +104,19 @@ def enviar_y_recibir(camara_id, foto_num, vector):
 
             # Si el nodo no es lider, reintenta con otro
             if respuesta.startswith("REDIRECT"):
-                print(f"[{camara_id}] Redirigido por puerto {puerto}. Buscando lider...")
-                for p in CLUSTER_PORTS:
-                    if p not in puertos_intentados:
-                        puertos_a_probar.insert(0, p)
+                print(f"[{camara_id}] Redirigido por {host}:{puerto}. Buscando lider...")
+                partes = respuesta.split("|")
+                if len(partes) >= 4 and "LIDER_ES:" in partes[3]:
+                    lider = partes[3].replace("LIDER_ES:", "")
+                    p = NODES.get(lider)
+                    h = NODE_HOSTS.get(lider, CLUSTER_HOST)
+                    if p and (h, p) not in intentados:
+                        endpoints_a_probar.insert(0, (h, p))
+                else:
+                    for node, p in NODES.items():
+                        h = NODE_HOSTS.get(node, CLUSTER_HOST)
+                        if (h, p) not in intentados:
+                            endpoints_a_probar.insert(0, (h, p))
                 continue
 
             # Exito: CLI_RES recibido
@@ -145,6 +161,11 @@ def hilo_camara(camara_id, fotos):
 
 if __name__ == "__main__":
     modo_auto = "--auto" in sys.argv
+    if "--host" in sys.argv:
+        idx = sys.argv.index("--host")
+        if idx + 1 < len(sys.argv):
+            CLUSTER_HOST = sys.argv[idx + 1]
+            NODE_HOSTS = {node: CLUSTER_HOST for node in NODES}
 
     print("=" * 60)
     print("  EMULADOR DE CAMARAS IP - Sistema Distribuido con Raft")

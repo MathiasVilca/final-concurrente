@@ -5,6 +5,7 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Scanner;
+import uTP.raft.RaftConfig;
 
 public class TestClient {
     public static void main(String[] args) {
@@ -24,8 +25,9 @@ public class TestClient {
                 rawInput += "\n";
             }
 
-            System.out.println("[DEBUG 1] Intentando conectar al puerto 8001...");
-            try (Socket socket = new Socket("127.0.0.1", 8001)) {
+            String host = RaftConfig.hostFor("NODE_1");
+            System.out.println("[DEBUG 1] Intentando conectar a " + host + ":8001...");
+            try (Socket socket = new Socket(host, 8001)) {
                 System.out.println("[DEBUG 2] ¡Conectado con éxito! Configurando timeout de 2s...");
                 socket.setSoTimeout(2000);
 

@@ -30,20 +30,55 @@ public class ClusterLauncher {
         System.out.println("[Launcher]   1. Espera ~2s a que el cluster elija un LIDER.");
         System.out.println("[Launcher]   2. Ejecuta: python 3-Emulador-Camaras/camera_client.py");
         System.out.println("[Launcher]   3. Ejecuta: python 4-Cliente-Vigilante/vigilante_app.py");
-        System.out.println("[Launcher]   4. Para tolerancia a fallos, descomenta el bloque al final.\n");
+        System.out.println("[Launcher]   4. Para tolerancia a fallos: java -cp out uTP.ClusterLauncher --demo-failover\n");
 
-        // -- DEMO DE TOLERANCIA A FALLOS ------------------------------------
-        // Para demostrar que Raft elige un nuevo lider cuando cae el actual,
-        // descomenta el bloque siguiente JUSTO ANTES de presentar al profesor.
-        // Esto mata NODE_1 a los 15s para que los otros dos elijan uno nuevo.
-        /*
-        try {
-            Thread.sleep(15000);
-            System.out.println("\n\n[DEMO] !!! MATANDO NODO 1 PARA PROBAR RAFT !!!\n\n");
-            nodo1.shutdown();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+        if (tieneArg(args, "--demo-failover")) {
+            long delayMs = leerDelay(args, 15000);
+            Thread demo = new Thread(() -> ejecutarDemoFailover(delayMs, nodo1, nodo2, nodo3), "Demo-Failover");
+            demo.setDaemon(true);
+            demo.start();
         }
-        */
+    }
+
+    private static boolean tieneArg(String[] args, String buscado) {
+        for (String arg : args) {
+            if (buscado.equals(arg)) return true;
+        }
+        return false;
+    }
+
+    private static long leerDelay(String[] args, long defaultMs) {
+        for (String arg : args) {
+            if (arg.startsWith("--failover-delay-ms=")) {
+                try {
+                    return Long.parseLong(arg.substring("--failover-delay-ms=".length()));
+                } catch (NumberFormatException ignored) {
+                    return defaultMs;
+                }
+            }
+        }
+        return defaultMs;
+    }
+
+    private static void ejecutarDemoFailover(long delayMs, NioServer... nodos) {
+        try {
+            Thread.sleep(delayMs);
+            NioServer lider = null;
+            for (NioServer nodo : nodos) {
+                if (nodo.isLeader()) {
+                    lider = nodo;
+                    break;
+                }
+            }
+            if (lider == null) {
+                lider = nodos[0];
+                System.out.println("[DEMO] No se detecto lider activo; apagando " + lider.getNodeId() + " como fallback.");
+            } else {
+                System.out.println("[DEMO] Apagando lider activo " + lider.getNodeId() + " para probar Raft.");
+            }
+            lider.shutdown();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }
