@@ -97,6 +97,16 @@ def construir_parser_argumentos():
     )
     parser.add_argument("--sintetico", action="store_true", help="No usar OpenCV/video; generar frames matematicos.")
     parser.add_argument("--auto", action="store_true", help="Iniciar sin pedir ENTER.")
+    parser.add_argument("--webcam", action="store_true", help="Usar la camara fisica de la laptop en lugar de los 3 videos demo.")
+    parser.add_argument("--camera-index", type=int, default=0, help="Indice de la webcam local para OpenCV. Normalmente 0.")
+    parser.add_argument(
+        "--tipo-webcam",
+        default="PERRO",
+        choices=sorted(BASES_POR_TIPO.keys()),
+        help="Clase de calibracion para la webcam: PERRO, GATO o CARRO.",
+    )
+    parser.add_argument("--camara-id", default="WEBCAM_1", help="Identificador enviado al cluster cuando se usa --webcam.")
+    parser.add_argument("--preview", action="store_true", help="Mostrar ventana local con la webcam. Presiona q para salir.")
     parser.add_argument("--host", default=None, help="IP/host del cluster cuando todos los nodos estan en la misma maquina.")
     parser.add_argument("--frames", type=int, default=None, help="Cantidad de frames a enviar por cada camara.")
     parser.add_argument("--fps-delay", type=float, default=None, help="Pausa en segundos entre frames por camara.")
@@ -363,6 +373,90 @@ class CamaraVideo(threading.Thread):
         print(f"\n  [{self.camara_id}] Fin de stream. {ok_count}/{self.cfg['frames']} frames clasificados.")
 
 
+def ejecutar_webcam(args):
+    """
+    Lee frames desde la camara fisica de la laptop y los envia al cluster Raft.
+
+    Nota academica: el modelo entrenado es de centroides para PERRO/GATO/CARRO.
+    Por eso se usa --tipo-webcam como clase de calibracion esperada para mapear
+    los frames reales al espacio de caracteristicas del modelo demo.
+    """
+    if not verificar_opencv():
+        print("[WEBCAM] ERROR: OpenCV no esta instalado.")
+        print("[WEBCAM] Instala con: python -m pip install opencv-python")
+        return
+
+    import cv2
+
+    tipo = args.tipo_webcam
+    cfg = dict(BASES_POR_TIPO[tipo])
+    cfg["tipo"] = tipo
+    cfg["frames"] = max(1, args.frames if args.frames is not None else 30)
+    cfg["fps_delay"] = max(0.0, args.fps_delay if args.fps_delay is not None else 1.0)
+
+    # En Windows, CAP_DSHOW reduce demoras y evita algunos bloqueos de apertura.
+    if os.name == "nt":
+        cap = cv2.VideoCapture(args.camera_index, cv2.CAP_DSHOW)
+    else:
+        cap = cv2.VideoCapture(args.camera_index)
+
+    if not cap.isOpened():
+        print(f"[WEBCAM] ERROR: No se pudo abrir la camara indice {args.camera_index}.")
+        print("[WEBCAM] Prueba con --camera-index 1 o revisa permisos de camara en Windows.")
+        return
+
+    print("=" * 60)
+    print("  WEBCAM LOCAL -> CLUSTER RAFT + IA")
+    print("=" * 60)
+    print(f"  Camara local: indice {args.camera_index}")
+    print(f"  ID enviado: {args.camara_id}")
+    print(f"  Clase de calibracion: {tipo}")
+    print(f"  Frames a enviar: {cfg['frames']}")
+    print(f"  Preview: {'SI' if args.preview else 'NO'}")
+    print("  Presiona q en la ventana de preview para detener antes de tiempo.")
+    print("=" * 60)
+
+    ok_count = 0
+    try:
+        for i in range(cfg["frames"]):
+            resultado = extraer_caracteristicas_cv2(cap, i, cfg)
+            if resultado is None:
+                print(f"[WEBCAM] No se pudo leer frame {i + 1}.")
+                continue
+
+            color, aspecto, textura, imagen_b64 = resultado
+            print(f"[WEBCAM] Frame {i + 1}/{cfg['frames']} -> color={color:.1f} aspecto={aspecto:.3f} textura={textura:.2f}")
+
+            resp = enviar_al_cluster(args.camara_id, [color, aspecto, textura], imagen_b64)
+            if resp and resp.startswith("CLI_RES"):
+                clase = resp.split("|")[-1]
+                ok_count += 1
+                print(f"[WEBCAM] *** DETECTADO: {clase} ***")
+            else:
+                print("[WEBCAM] ERROR: sin respuesta del cluster.")
+
+            if args.preview:
+                # Mostrar un frame fresco para que el usuario vea la camara en vivo.
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    cv2.putText(frame, f"Detectando como: {tipo}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+                    cv2.imshow("Webcam - presiona q para salir", frame)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
+
+            if i < cfg["frames"] - 1:
+                time.sleep(cfg["fps_delay"])
+    finally:
+        cap.release()
+        if args.preview:
+            cv2.destroyAllWindows()
+
+    print("=" * 60)
+    print(f"  WEBCAM FINALIZADA: {ok_count}/{cfg['frames']} frames clasificados.")
+    print("  Revisa el Cliente Vigilante y la carpeta capturas/ del cluster.")
+    print("=" * 60)
+
+
 # =========================================================================== #
 #  HELPERS
 # =========================================================================== #
@@ -410,6 +504,11 @@ def main():
     if args.host:
         CLUSTER_HOST = args.host
         NODE_HOSTS = {node: args.host for node in NODES}
+
+    if args.webcam:
+        ejecutar_webcam(args)
+        return
+
     camaras_config = aplicar_argumentos_a_camaras(args)
 
     modo_sintetico = args.sintetico
