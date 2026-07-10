@@ -101,12 +101,21 @@ def construir_parser_argumentos():
     parser.add_argument("--camera-index", type=int, default=0, help="Indice de la webcam local para OpenCV. Normalmente 0.")
     parser.add_argument(
         "--tipo-webcam",
-        default="PERRO",
+        default=None,
         choices=sorted(BASES_POR_TIPO.keys()),
-        help="Clase de calibracion para la webcam: PERRO, GATO o CARRO.",
+        help="Clase de calibracion SOLO si usas --calibrar-webcam: PERRO, GATO o CARRO.",
+    )
+    parser.add_argument(
+        "--calibrar-webcam",
+        action="store_true",
+        help="Modo demo: ajusta la webcam hacia la clase indicada con --tipo-webcam.",
     )
     parser.add_argument("--camara-id", default="WEBCAM_1", help="Identificador enviado al cluster cuando se usa --webcam.")
     parser.add_argument("--preview", action="store_true", help="Mostrar ventana local con la webcam. Presiona q para salir.")
+    parser.add_argument("--continuous", action="store_true", help="Mantener la camara encendida hasta presionar q. Ignora el limite de --frames para cortar la vista.")
+    parser.add_argument("--send-interval", type=float, default=None, help="Intervalo en segundos entre envios al cluster. Recomendado: 1.0 a 2.0.")
+    parser.add_argument("--webcam-max-width", type=int, default=360, help="Ancho maximo del PNG enviado. 360/480 dan buena calidad.")
+    parser.add_argument("--no-send-image", action="store_true", help="Envia solo vector numerico, no PNG. Maxima fluidez, pero no guarda foto real.")
     parser.add_argument("--host", default=None, help="IP/host del cluster cuando todos los nodos estan en la misma maquina.")
     parser.add_argument("--frames", type=int, default=None, help="Cantidad de frames a enviar por cada camara.")
     parser.add_argument("--fps-delay", type=float, default=None, help="Pausa en segundos entre frames por camara.")
@@ -155,10 +164,13 @@ def aplicar_argumentos_a_camaras(args):
 #  EXTRACCION DE CARACTERISTICAS
 # =========================================================================== #
 
-def codificar_frame_png_base64(frame, max_w=360):
+def codificar_frame_jpg_base64(frame, max_w=200, calidad=60):
     """
-    Convierte un frame OpenCV (BGR) a PNG Base64 compacto para enviarlo al cluster.
-    Se reduce el ancho para no saturar el protocolo TCP de texto.
+    Convierte un frame OpenCV (BGR) a JPEG Base64 compacto para enviarlo al cluster.
+    JPEG es ~10x mas pequeno que PNG, evita saturar el protocolo TCP y reduce latencia.
+    max_w=200 y calidad=60 dan buena relacion tamano/fidelidad.
+    IMPORTANTE: base64.b64encode nunca produce saltos de linea (RFC 4648 sin padding de lineas),
+    por lo que es seguro usarlo como payload del protocolo delimitado por \n.
     """
     import cv2
 
@@ -167,10 +179,17 @@ def codificar_frame_png_base64(frame, max_w=360):
         escala = max_w / float(w)
         frame = cv2.resize(frame, (max_w, max(1, int(h * escala))), interpolation=cv2.INTER_AREA)
 
-    ok, buffer = cv2.imencode(".png", frame)
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, calidad]
+    ok, buffer = cv2.imencode(".jpg", frame, encode_params)
     if not ok:
         return ""
     return base64.b64encode(buffer.tobytes()).decode("ascii")
+
+
+# Alias de compatibilidad con el codigo existente que usa el nombre anterior
+def codificar_frame_png_base64(frame, max_w=360):
+    """Alias para codificar_frame_jpg_base64 con parametros compatibles."""
+    return codificar_frame_jpg_base64(frame, max_w=min(max_w, 200))
 
 
 def extraer_caracteristicas_cv2(cap, frame_idx, cfg=None):
@@ -219,6 +238,62 @@ def extraer_caracteristicas_cv2(cap, frame_idx, cfg=None):
 
     frame_b64 = codificar_frame_png_base64(frame)
     return color_promedio, aspecto, textura, frame_b64
+
+
+def extraer_caracteristicas_frame(frame, cfg=None, max_w=360, incluir_imagen=True):
+    """
+    Extrae caracteristicas desde un frame ya capturado de webcam.
+    Esto evita leer la camara dos veces y permite mostrar preview en tiempo real
+    mientras el envio al cluster ocurre en segundo plano.
+    """
+    import cv2
+    import numpy as np
+
+    gris = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    color_promedio = float(np.mean(gris))
+    h, w = frame.shape[:2]
+    aspecto = round(w / h, 3) if h > 0 else 1.0
+    textura = round(float(np.std(gris)), 2)
+
+    if cfg is not None and "color_base" in cfg:
+        variacion_color = max(-3.0, min(3.0, (color_promedio - cfg["color_base"]) * 0.05))
+        variacion_textura = max(-2.0, min(2.0, (textura - cfg["textura_base"]) * 0.05))
+        color_promedio = round(cfg["color_base"] + variacion_color, 2)
+        aspecto = round(cfg["aspecto_base"], 3)
+        textura = round(cfg["textura_base"] + variacion_textura, 2)
+
+    imagen_b64 = codificar_frame_png_base64(frame, max_w=max_w) if incluir_imagen else ""
+    return color_promedio, aspecto, textura, imagen_b64
+
+
+def dibujar_overlay_webcam(frame, clase, estado_texto, camara_id, enviados, ok_count, total_frames, en_vuelo):
+    """Dibuja recuadro y resultado en la ventana de webcam en tiempo real."""
+    import cv2
+    h, w = frame.shape[:2]
+    color_por_clase = {
+        "PERRO": (0, 220, 0),
+        "GATO": (255, 120, 0),
+        "CARRO": (0, 140, 255),
+        "DESCONOCIDO": (180, 180, 180),
+        "-": (0, 255, 255),
+    }
+    color = color_por_clase.get(str(clase).upper(), (0, 255, 255))
+
+    box_w = int(w * 0.58)
+    box_h = int(h * 0.62)
+    x = max(8, (w - box_w) // 2)
+    y = max(55, (h - box_h) // 2 + 20)
+    cv2.rectangle(frame, (x, y), (min(w - 8, x + box_w), min(h - 8, y + box_h)), color, 3)
+
+    titulo = f"Detecto: {clase}" if clase and clase != "-" else "Detectando..."
+    cv2.rectangle(frame, (x, max(0, y - 38)), (min(w - 8, x + 360), y), color, -1)
+    cv2.putText(frame, titulo, (x + 8, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0), 2)
+
+    progreso = f"{camara_id} | enviados {enviados}/{total_frames if total_frames else 'inf'} | OK {ok_count}"
+    envio = "enviando..." if en_vuelo else "listo"
+    cv2.putText(frame, progreso, (15, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 255, 255), 2)
+    cv2.putText(frame, f"{estado_texto} | {envio} | q=salir", (15, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+    return frame
 
 
 def extraer_caracteristicas_sinteticas(cfg, frame_idx):
@@ -375,11 +450,11 @@ class CamaraVideo(threading.Thread):
 
 def ejecutar_webcam(args):
     """
-    Lee frames desde la camara fisica de la laptop y los envia al cluster Raft.
-
-    Nota academica: el modelo entrenado es de centroides para PERRO/GATO/CARRO.
-    Por eso se usa --tipo-webcam como clase de calibracion esperada para mapear
-    los frames reales al espacio de caracteristicas del modelo demo.
+    Webcam en tiempo real:
+    - muestra la imagen continuamente;
+    - envia frames al cluster en segundo plano para no lagear;
+    - dibuja en la misma ventana PERRO/GATO/CARRO/DESCONOCIDO;
+    - el cluster guarda la captura clasificada cuando se envia imagen.
     """
     if not verificar_opencv():
         print("[WEBCAM] ERROR: OpenCV no esta instalado.")
@@ -388,72 +463,190 @@ def ejecutar_webcam(args):
 
     import cv2
 
-    tipo = args.tipo_webcam
-    cfg = dict(BASES_POR_TIPO[tipo])
-    cfg["tipo"] = tipo
-    cfg["frames"] = max(1, args.frames if args.frames is not None else 30)
-    cfg["fps_delay"] = max(0.0, args.fps_delay if args.fps_delay is not None else 1.0)
-
-    # En Windows, CAP_DSHOW reduce demoras y evita algunos bloqueos de apertura.
-    if os.name == "nt":
-        cap = cv2.VideoCapture(args.camera_index, cv2.CAP_DSHOW)
+    tipo = args.tipo_webcam or "SIN_CALIBRAR"
+    if args.calibrar_webcam:
+        tipo = args.tipo_webcam or "PERRO"
+        cfg = dict(BASES_POR_TIPO[tipo])
+        cfg["tipo"] = tipo
     else:
-        cap = cv2.VideoCapture(args.camera_index)
+        cfg = {"tipo": tipo}
 
-    if not cap.isOpened():
+    total_frames = max(1, args.frames if args.frames is not None else 999999)
+    send_interval = args.send_interval
+    if send_interval is None:
+        send_interval = args.fps_delay if args.fps_delay is not None else 1.0
+    send_interval = max(0.25, float(send_interval))
+
+    # ── Apertura de camara con maximo 2 intentos de backend ──────────────────
+    cap = None
+    backends = [cv2.CAP_DSHOW, cv2.CAP_ANY] if os.name == "nt" else [cv2.CAP_ANY]
+    for backend in backends:
+        _cap = cv2.VideoCapture(args.camera_index, backend)
+        if _cap.isOpened():
+            cap = _cap
+            break
+        _cap.release()
+
+    if cap is None or not cap.isOpened():
         print(f"[WEBCAM] ERROR: No se pudo abrir la camara indice {args.camera_index}.")
         print("[WEBCAM] Prueba con --camera-index 1 o revisa permisos de camara en Windows.")
         return
 
+    # ── Configuracion para MINIMA LATENCIA ───────────────────────────────────
+    # BUFFERSIZE=1 evita que OpenCV acumule frames viejos (causa principal del lag).
+    # Resolucion 640x480 equilibra calidad y velocidad de captura.
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # clave anti-lag: descartar frames acumulados
+
+    estado = {
+        "enviados": 0,
+        "ok": 0,
+        "en_vuelo": False,
+        "ultimo_envio": 0.0,
+        "ultima_clase": "-",
+        "ultima_resp": "esperando primer envio",
+        "detener": False,
+    }
+    estado_lock = threading.Lock()
+
+    def enviar_frame_async(frame_snapshot, numero_frame):
+        try:
+            # Usar max_w pequeño (200px) para JPEG: trama mas pequeña, menos latencia TCP
+            max_ancho_envio = min(200, max(120, args.webcam_max_width))
+            color, aspecto, textura, imagen_b64 = extraer_caracteristicas_frame(
+                frame_snapshot,
+                cfg if args.calibrar_webcam else None,
+                max_w=max_ancho_envio,
+                incluir_imagen=not args.no_send_image,
+            )
+            resp = enviar_al_cluster(args.camara_id, [color, aspecto, textura], imagen_b64)
+            with estado_lock:
+                if resp and resp.startswith("CLI_RES"):
+                    # Respuesta: CLI_RES|NODE_X|0|CLASE
+                    partes_resp = resp.split("|")
+                    clase = partes_resp[-1].strip() if partes_resp else "DESCONOCIDO"
+                    # Normalizar clase conocida
+                    if clase not in ("PERRO", "GATO", "CARRO", "DESCONOCIDO"):
+                        clase = "DESCONOCIDO"
+                    estado["ok"] += 1
+                    estado["ultima_clase"] = clase
+                    estado["ultima_resp"] = f"OK {clase}"
+                    print(f"[WEBCAM] Frame {numero_frame} -> {clase}  "
+                          f"vec=({color:.1f},{aspecto:.3f},{textura:.1f})")
+                elif resp and "ERROR" in resp:
+                    # El cluster devolvio ERROR (excepcion interna)
+                    estado["ultima_resp"] = "cluster ERROR - reintentando"
+                    estado["ultima_clase"] = "DESCONOCIDO"
+                    print(f"[WEBCAM] Frame {numero_frame} -> cluster reporto ERROR")
+                else:
+                    estado["ultima_resp"] = "sin respuesta del cluster"
+                    print(f"[WEBCAM] Frame {numero_frame} -> sin respuesta")
+        except Exception as e:
+            with estado_lock:
+                estado["ultima_resp"] = f"error local: {e}"
+            print(f"[WEBCAM] Error enviando frame {numero_frame}: {e}")
+        finally:
+            with estado_lock:
+                estado["en_vuelo"] = False
+
     print("=" * 60)
-    print("  WEBCAM LOCAL -> CLUSTER RAFT + IA")
+    print("  WEBCAM EN VIVO -> CLUSTER RAFT + IA")
     print("=" * 60)
     print(f"  Camara local: indice {args.camera_index}")
     print(f"  ID enviado: {args.camara_id}")
-    print(f"  Clase de calibracion: {tipo}")
-    print(f"  Frames a enviar: {cfg['frames']}")
-    print(f"  Preview: {'SI' if args.preview else 'NO'}")
-    print("  Presiona q en la ventana de preview para detener antes de tiempo.")
+    print(f"  Modo: {'CALIBRADO/DEMO' if args.calibrar_webcam else 'REAL sin calibracion'}")
+    print(f"  Clase calibracion: {tipo if args.calibrar_webcam else 'ninguna'}")
+    print(f"  Envios maximos: {'continuo' if args.continuous else total_frames}")
+    print(f"  Intervalo envio: {send_interval}s")
+    print(f"  Guarda imagen real: {'NO' if args.no_send_image else 'SI'} | ancho PNG={args.webcam_max_width}")
+    print("  Presiona q en la ventana para salir.")
     print("=" * 60)
 
-    ok_count = 0
     try:
-        for i in range(cfg["frames"]):
-            resultado = extraer_caracteristicas_cv2(cap, i, cfg)
-            if resultado is None:
-                print(f"[WEBCAM] No se pudo leer frame {i + 1}.")
+        while True:
+            # ── ANTI-LAG: descartar frames acumulados en el buffer ───────────
+            # cap.grab() descarta sin decodificar; solo decodificamos el ultimo.
+            # Esto evita que la ventana muestre frames "viejos" acumulados.
+            for _ in range(2):
+                cap.grab()
+            ret, frame = cap.retrieve()
+            if not ret or frame is None:
+                ret, frame = cap.read()   # fallback
+            if not ret or frame is None:
+                time.sleep(0.02)
                 continue
 
-            color, aspecto, textura, imagen_b64 = resultado
-            print(f"[WEBCAM] Frame {i + 1}/{cfg['frames']} -> color={color:.1f} aspecto={aspecto:.3f} textura={textura:.2f}")
+            ahora = time.time()
+            with estado_lock:
+                limite_ok = args.continuous or estado["enviados"] < total_frames
+                puede_enviar = (
+                    limite_ok
+                    and not estado["en_vuelo"]
+                    and (ahora - estado["ultimo_envio"] >= send_interval)
+                )
+                if puede_enviar:
+                    estado["en_vuelo"] = True
+                    estado["enviados"] += 1
+                    estado["ultimo_envio"] = ahora
+                    numero_frame = estado["enviados"]
+                else:
+                    numero_frame = None
 
-            resp = enviar_al_cluster(args.camara_id, [color, aspecto, textura], imagen_b64)
-            if resp and resp.startswith("CLI_RES"):
-                clase = resp.split("|")[-1]
-                ok_count += 1
-                print(f"[WEBCAM] *** DETECTADO: {clase} ***")
-            else:
-                print("[WEBCAM] ERROR: sin respuesta del cluster.")
+                enviados = estado["enviados"]
+                ok_count = estado["ok"]
+                clase = estado["ultima_clase"]
+                resp_txt = estado["ultima_resp"]
+                en_vuelo = estado["en_vuelo"]
 
-            if args.preview:
-                # Mostrar un frame fresco para que el usuario vea la camara en vivo.
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    cv2.putText(frame, f"Detectando como: {tipo}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
-                    cv2.imshow("Webcam - presiona q para salir", frame)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
+            if numero_frame is not None:
+                threading.Thread(
+                    target=enviar_frame_async,
+                    args=(frame.copy(), numero_frame),
+                    name="WebcamSender",
+                    daemon=True,
+                ).start()
 
-            if i < cfg["frames"] - 1:
-                time.sleep(cfg["fps_delay"])
+            frame_mostrar = dibujar_overlay_webcam(
+                frame,
+                clase,
+                resp_txt,
+                args.camara_id,
+                enviados,
+                ok_count,
+                None if args.continuous else total_frames,
+                en_vuelo,
+            )
+            cv2.imshow("Webcam IA + Raft - tiempo real (q para salir)", frame_mostrar)
+
+            # waitKey(1) es necesario para que OpenCV procese eventos de ventana.
+            # Un valor mas alto (ej. 10) reduciria CPU pero aumentaria el lag de 'q'.
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+            with estado_lock:
+                terminado = (not args.continuous) and estado["enviados"] >= total_frames and not estado["en_vuelo"]
+            if terminado:
+                # Dejar visible un instante el ultimo resultado y salir.
+                time.sleep(0.4)
+                break
     finally:
-        cap.release()
-        if args.preview:
-            cv2.destroyAllWindows()
+        # Asegurar liberacion aunque haya excepcion inesperada
+        try:
+            cap.release()
+        except Exception:
+            pass
+        cv2.destroyAllWindows()
+
+    with estado_lock:
+        ok_count = estado["ok"]
+        enviados = estado["enviados"]
+        ultima_clase = estado["ultima_clase"]
 
     print("=" * 60)
-    print(f"  WEBCAM FINALIZADA: {ok_count}/{cfg['frames']} frames clasificados.")
-    print("  Revisa el Cliente Vigilante y la carpeta capturas/ del cluster.")
+    print(f"  WEBCAM FINALIZADA: {ok_count}/{enviados} respuestas OK. Ultimo={ultima_clase}")
+    print("  Las capturas clasificadas se guardan en 2-Cluster-Testeo-Raft/capturas/ si no usaste --no-send-image.")
     print("=" * 60)
 
 

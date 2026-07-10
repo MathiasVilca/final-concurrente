@@ -73,7 +73,7 @@ public class NioServer implements Runnable {
     private void handleRead(SelectionKey key) {
         SocketChannel client = (SocketChannel) key.channel();
         StringBuilder bufferAcumulador = (StringBuilder) key.attachment();
-        ByteBuffer byteBuffer = ByteBuffer.allocate(65536); // Grande para payloads Base64
+        ByteBuffer byteBuffer = ByteBuffer.allocate(524288); // 512 KB: soporta frames Base64 de hasta ~380 KB
 
         try {
             int bytesRead = client.read(byteBuffer);
